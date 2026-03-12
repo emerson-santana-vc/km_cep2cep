@@ -19,11 +19,12 @@ RUN pip install --no-cache-dir --upgrade pip \
 COPY app ./app
 COPY Procfile ./Procfile
 
-ENV PORT=8000
+#ENV PORT=8000
 
-EXPOSE 8000
+#EXPOSE 8000
 
 # Railway define a variável de ambiente PORT em runtime.
 # Usamos $PORT (e não ${PORT}) para garantir que o shell faça a expansão corretamente.
-CMD ["sh", "-c", "streamlit run app/main.py --server.port=$PORT --server.address=0.0.0.0"]
+#CMD ["sh", "-c", "streamlit run app/main.py --server.port=$PORT --server.address=0.0.0.0"]
 
+CMD ["streamlit", "run", "app/main.py"]
