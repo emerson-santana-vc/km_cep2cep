@@ -23,5 +23,7 @@ ENV PORT=8000
 
 EXPOSE 8000
 
-CMD ["sh", "-c", "streamlit run app/main.py --server.port=${PORT} --server.address=0.0.0.0"]
+# Railway define a variável de ambiente PORT em runtime.
+# Usamos $PORT (e não ${PORT}) para garantir que o shell faça a expansão corretamente.
+CMD ["sh", "-c", "streamlit run app/main.py --server.port=$PORT --server.address=0.0.0.0"]
 
