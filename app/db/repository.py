@@ -2,7 +2,9 @@ import os
 from datetime import datetime
 from typing import Optional
 
+from dotenv import load_dotenv
 from sqlalchemy import (
+    Boolean,
     Column,
     DateTime,
     Float,
@@ -12,11 +14,15 @@ from sqlalchemy import (
     String,
     Text,
     create_engine,
+    inspect,
     select,
+    text,
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship, sessionmaker
 
-from services.distance_service import DistanceMode
+from services.distance_service import DistanceMode, GeocodingProvider, RoutingProvider
+
+load_dotenv()
 
 
 class Base(DeclarativeBase):
@@ -57,6 +63,11 @@ class DistanceResult(Base):
     destination_lng: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     distance_km: Mapped[Optional[float]] = mapped_column(Numeric(12, 3), nullable=True)
     mode: Mapped[str] = mapped_column(String(32), nullable=False)
+    geocoding_provider: Mapped[str] = mapped_column(String(32), nullable=False, default="AUTO")
+    routing_provider: Mapped[str] = mapped_column(String(32), nullable=False, default="AUTO")
+    geocoding_provider_used: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
+    routing_provider_used: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
+    fallback_used: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="ok")
     error_message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
@@ -72,6 +83,25 @@ SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False)
 
 def init_db() -> None:
     Base.metadata.create_all(bind=engine)
+    _ensure_distance_result_columns()
+
+
+def _ensure_distance_result_columns() -> None:
+    required_columns = {
+        "geocoding_provider": "VARCHAR(32) NOT NULL DEFAULT 'AUTO'",
+        "routing_provider": "VARCHAR(32) NOT NULL DEFAULT 'AUTO'",
+        "geocoding_provider_used": "VARCHAR(32)",
+        "routing_provider_used": "VARCHAR(32)",
+        "fallback_used": "BOOLEAN NOT NULL DEFAULT FALSE",
+    }
+
+    with engine.begin() as connection:
+        inspector = inspect(connection)
+        existing = {column["name"] for column in inspector.get_columns("distance_results")}
+        for column_name, ddl in required_columns.items():
+            if column_name in existing:
+                continue
+            connection.execute(text(f"ALTER TABLE distance_results ADD COLUMN {column_name} {ddl}"))
 
 
 def create_distance_request(filename: str, mode: DistanceMode, total_rows: int) -> DistanceRequest:
@@ -117,8 +147,13 @@ def save_distance_result(
     destination_lng: Optional[float],
     distance_km: Optional[float],
     mode: DistanceMode,
+    geocoding_provider: GeocodingProvider,
+    routing_provider: RoutingProvider,
     status: str,
     error_message: Optional[str],
+    geocoding_provider_used: Optional[str],
+    routing_provider_used: Optional[str],
+    fallback_used: bool,
 ) -> DistanceResult:
     session = SessionLocal()
     try:
@@ -132,6 +167,11 @@ def save_distance_result(
             destination_lng=destination_lng,
             distance_km=distance_km,
             mode=mode.name,
+            geocoding_provider=geocoding_provider.name,
+            routing_provider=routing_provider.name,
+            geocoding_provider_used=geocoding_provider_used,
+            routing_provider_used=routing_provider_used,
+            fallback_used=fallback_used,
             status=status,
             error_message=error_message,
         )
@@ -143,7 +183,13 @@ def save_distance_result(
         session.close()
 
 
-def get_cached_distance(origin: str, destination: str, mode: DistanceMode) -> Optional[float]:
+def get_cached_distance(
+    origin: str,
+    destination: str,
+    mode: DistanceMode,
+    geocoding_provider: GeocodingProvider,
+    routing_provider: RoutingProvider,
+) -> Optional[float]:
     session = SessionLocal()
     try:
         stmt = (
@@ -151,6 +197,8 @@ def get_cached_distance(origin: str, destination: str, mode: DistanceMode) -> Op
             .where(DistanceResult.origin_raw == origin)
             .where(DistanceResult.destination_raw == destination)
             .where(DistanceResult.mode == mode.name)
+            .where(DistanceResult.geocoding_provider == geocoding_provider.name)
+            .where(DistanceResult.routing_provider == routing_provider.name)
             .where(DistanceResult.status == "ok")
         )
         obj = session.scalars(stmt).first()
