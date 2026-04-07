@@ -44,6 +44,13 @@ def process_single():
 
     origin = st.text_input("Endereço de origem")
     destination = st.text_input("Endereço de destino")
+    
+    # Optional IBGE codes
+    col1, col2 = st.columns(2)
+    with col1:
+        ibge_codigo_origem = st.text_input("Código IBGE de origem (opcional)")
+    with col2:
+        ibge_codigo_destino = st.text_input("Código IBGE de destino (opcional)")
 
     mode_label = st.radio(
         "Modo de cálculo",
@@ -89,6 +96,8 @@ def process_single():
                     mode,
                     geocoding_provider=geocoding_provider,
                     routing_provider=routing_provider,
+                    origin_ibge_code=ibge_codigo_origem if ibge_codigo_origem else None,
+                    destination_ibge_code=ibge_codigo_destino if ibge_codigo_destino else None,
                 )
                 distance_km = result.distance_km
                 save_distance_result(
@@ -108,6 +117,8 @@ def process_single():
                     geocoding_provider_used=result.geocoding_provider_used,
                     routing_provider_used=result.routing_provider_used,
                     fallback_used=result.fallback_used,
+                    origin_ibge_code=ibge_codigo_origem if ibge_codigo_origem else None,
+                    destination_ibge_code=ibge_codigo_destino if ibge_codigo_destino else None,
                 )
 
         if distance_km is not None:
@@ -140,6 +151,18 @@ def process_batch():
 
     col_origin = st.selectbox("Coluna de endereço de origem", df.columns)
     col_destination = st.selectbox("Coluna de endereço de destino", df.columns)
+    
+    # Optional IBGE code columns
+    col_ibge_origin = st.selectbox(
+        "Coluna de código IBGE de origem (opcional)",
+        [None] + list(df.columns),
+        index=0,
+    )
+    col_ibge_destination = st.selectbox(
+        "Coluna de código IBGE de destino (opcional)",
+        [None] + list(df.columns),
+        index=0,
+    )
 
     mode_label = st.radio(
         "Modo de cálculo",
@@ -187,6 +210,20 @@ def process_batch():
         for idx, row in df.iterrows():
             origin = str(row[col_origin])
             destination = str(row[col_destination])
+            
+            # Extract IBGE codes if columns are specified
+            ibge_codigo_origem = None
+            ibge_codigo_destino = None
+            if col_ibge_origin:
+                try:
+                    ibge_codigo_origem = str(row[col_ibge_origin]) if pd.notna(row[col_ibge_origin]) else None
+                except (KeyError, TypeError):
+                    pass
+            if col_ibge_destination:
+                try:
+                    ibge_codigo_destino = str(row[col_ibge_destination]) if pd.notna(row[col_ibge_destination]) else None
+                except (KeyError, TypeError):
+                    pass
 
             cached = get_cached_distance(
                 origin,
@@ -206,6 +243,8 @@ def process_batch():
                     mode,
                     geocoding_provider=geocoding_provider,
                     routing_provider=routing_provider,
+                    origin_ibge_code=ibge_codigo_origem,
+                    destination_ibge_code=ibge_codigo_destino,
                 )
                 distance_km = result.distance_km
                 status = result.status
@@ -228,6 +267,8 @@ def process_batch():
                     geocoding_provider_used=result.geocoding_provider_used,
                     routing_provider_used=result.routing_provider_used,
                     fallback_used=result.fallback_used,
+                    origin_ibge_code=ibge_codigo_origem,
+                    destination_ibge_code=ibge_codigo_destino,
                 )
 
             distances.append(distance_km)
@@ -366,6 +407,7 @@ def process_oracle_search():
 
         if st.button("Processar Distâncias", key="oracle_process_distances"):
             with st.spinner("Iniciando processamento de distâncias..."):
+                # Extract IBGE codes if available (only for first row to set request-level codes, if needed)
                 request = create_distance_request(
                     filename="consulta_oracle",
                     mode=mode,
@@ -386,6 +428,10 @@ def process_oracle_search():
                 # Build complete addresses from Oracle fields
                 origin = f"{row.get('endereco_origem', '')} {row.get('cidade_origem', '')} {row.get('uf', '')}"
                 destination = f"{row.get('endereco_destino', '')} {row.get('cidade_destino', '')} {row.get('uf', '')}"
+                
+                # Extract IBGE codes if available
+                ibge_codigo_origem = row.get('cidade_ibge_origem')
+                ibge_codigo_destino = row.get('cidade_ibge_destino')
 
                 cached = get_cached_distance(
                     origin,
@@ -435,6 +481,8 @@ def process_oracle_search():
                         geocoding_provider_used=result.geocoding_provider_used,
                         routing_provider_used=result.routing_provider_used,
                         fallback_used=result.fallback_used,
+                        origin_ibge_code=ibge_codigo_origem,
+                        destination_ibge_code=ibge_codigo_destino,
                     )
 
                 distances.append(distance_km)

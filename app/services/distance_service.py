@@ -561,6 +561,8 @@ def calculate_distance_single(
     mode: DistanceMode,
     geocoding_provider: GeocodingProvider = GeocodingProvider.AUTO,
     routing_provider: RoutingProvider = RoutingProvider.AUTO,
+    origin_ibge_code: Optional[str] = None,
+    destination_ibge_code: Optional[str] = None,
 ) -> DistanceResult:
     try:
         origin_coords, origin_provider, origin_fallback, origin_geo_error = _geocode_with_fallback(origin_address, geocoding_provider)
