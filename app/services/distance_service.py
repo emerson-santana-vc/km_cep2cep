@@ -11,6 +11,8 @@ from typing import Optional, Tuple
 import requests
 from geopy.geocoders import Nominatim
 
+from services.ibge_service import get_city_from_ibge_code
+
 
 class DistanceMode(str, Enum):
     ROUTE = "Rota viária aproximada"
@@ -379,6 +381,120 @@ def _compose_from_cep(cep_data: dict) -> tuple[str, str, str]:
     return cep_only, cep_uf, cep_uf_logradouro
 
 
+def _normalize_ibge_code(value: Optional[str]) -> Optional[str]:
+    digits = re.sub(r"\D", "", str(value or ""))
+    return digits or None
+
+
+def _build_candidates_from_cep(cep_value: Optional[str], context_text: str = "") -> tuple[list[str], Optional[dict], Optional[str]]:
+    cep_digits = re.sub(r"\D", "", str(cep_value or ""))
+    if not cep_digits:
+        return [], None, None
+
+    candidates: list[str] = []
+    warning: Optional[str] = None
+    cep_data = _lookup_cep(cep_digits)
+
+    if cep_data:
+        input_uf = _extract_uf_from_text(context_text)
+        cep_uf = str(cep_data.get("uf") or "").strip().upper()
+        if input_uf and cep_uf and input_uf != cep_uf:
+            warning = f"CEP {cep_digits} divergente da UF no texto ({input_uf}); ViaCEP retornou UF {cep_uf}."
+
+        cep_only, cep_plus_uf, cep_plus_uf_logradouro = _compose_from_cep(cep_data)
+        for candidate in (cep_only, cep_plus_uf, cep_plus_uf_logradouro):
+            cleaned = _clean_address_text(candidate)
+            if cleaned and cleaned not in candidates:
+                candidates.append(cleaned)
+        return candidates, cep_data, warning
+
+    formatted_cep = f"{cep_digits[:5]}-{cep_digits[5:]}" if len(cep_digits) == 8 else cep_digits
+    for candidate in (f"{formatted_cep}, Brasil", f"{cep_digits}, Brasil"):
+        cleaned = _clean_address_text(candidate)
+        if cleaned and cleaned not in candidates:
+            candidates.append(cleaned)
+    return candidates, None, None
+
+
+def _build_candidates_from_ibge(ibge_code: Optional[str]) -> tuple[list[str], Optional[dict]]:
+    normalized_code = _normalize_ibge_code(ibge_code)
+    if not normalized_code:
+        return [], None
+
+    city_info = get_city_from_ibge_code(normalized_code)
+    if not city_info:
+        return [], None
+
+    city_name = str(city_info.get("city_name") or "").strip()
+    state_code = _normalize_uf(city_info.get("state_code"))
+
+    candidates: list[str] = []
+    for candidate in (
+        f"{city_name}, {state_code}, Brasil",
+        f"{city_name}, Brasil",
+    ):
+        cleaned = _clean_address_text(candidate)
+        if cleaned and cleaned not in candidates:
+            candidates.append(cleaned)
+
+    return candidates, city_info
+
+
+def _matches_ibge_context(match: GeocodeMatch, ibge_city_info: Optional[dict]) -> bool:
+    if not ibge_city_info:
+        return True
+
+    expected_city = _normalize_token(ibge_city_info.get("city_name"))
+    expected_uf = _normalize_uf(ibge_city_info.get("state_code"))
+    match_city = _normalize_token(match.locality)
+    match_uf = _normalize_uf(match.uf)
+
+    if expected_city and match_city and expected_city != match_city:
+        return False
+    if expected_uf and match_uf and expected_uf != match_uf:
+        return False
+    return True
+
+
+def _geocode_candidates(
+    candidates: list[str],
+    preferred: GeocodingProvider,
+    *,
+    cep_data: Optional[dict] = None,
+    ibge_city_info: Optional[dict] = None,
+    stage_index: int = 0,
+) -> tuple[Optional[Tuple[float, float]], Optional[str], bool]:
+    providers = _provider_chain_geocoding(preferred)
+
+    for provider_index, provider in enumerate(providers):
+        for candidate in candidates:
+            try:
+                if provider == GeocodingProvider.NOMINATIM:
+                    coords = _geocode_nominatim(candidate)
+                elif provider == GeocodingProvider.GOOGLE:
+                    coords = _geocode_google(candidate)
+                else:
+                    coords = _geocode_openrouteservice(candidate)
+            except Exception:
+                coords = None
+
+            if not coords:
+                continue
+
+            if not _match_cep_context(coords, cep_data):
+                continue
+
+            if not _is_plausible_geocode(coords, cep_data):
+                continue
+
+            if not _matches_ibge_context(coords, ibge_city_info):
+                continue
+
+            return (coords.lat, coords.lng), provider.name, (provider_index > 0 or stage_index > 0)
+
+    return None, None, False
+
+
 def _build_search_candidates(address: str) -> tuple[list[str], Optional[str], Optional[dict]]:
     raw = (address or "").strip()
     candidates: list[str] = []
@@ -423,28 +539,85 @@ def _build_search_candidates(address: str) -> tuple[list[str], Optional[str], Op
 
     return candidates, None, cep_data if cep else None
 
-def _geocode_with_fallback(address: str, preferred: GeocodingProvider) -> tuple[Optional[Tuple[float, float]], Optional[str], bool, Optional[str]]:
-    providers = _provider_chain_geocoding(preferred)
-    candidates, pre_validation_error, cep_data = _build_search_candidates(address)
-    if pre_validation_error:
-        return None, None, False, pre_validation_error
+def _geocode_with_fallback(
+    address: str,
+    preferred: GeocodingProvider,
+    *,
+    explicit_cep: Optional[str] = None,
+    ibge_code: Optional[str] = None,
+    include_full_address_fallback: bool = True,
+) -> tuple[Optional[Tuple[float, float]], Optional[str], bool, Optional[str], Optional[str]]:
+    warnings: list[str] = []
 
-    for index, provider in enumerate(providers):
-        for candidate in candidates:
-            try:
-                if provider == GeocodingProvider.NOMINATIM:
-                    coords = _geocode_nominatim(candidate)
-                elif provider == GeocodingProvider.GOOGLE:
-                    coords = _geocode_google(candidate)
-                else:
-                    coords = _geocode_openrouteservice(candidate)
-            except Exception:
-                coords = None
+    cep_candidates: list[str] = []
+    cep_data: Optional[dict] = None
+    explicit_cep_digits = re.sub(r"\D", "", str(explicit_cep or ""))
 
-            if coords and _match_cep_context(coords, cep_data) and _is_plausible_geocode(coords, cep_data):
-                return (coords.lat, coords.lng), provider.name, index > 0, None
+    if explicit_cep_digits:
+        cep_candidates, cep_data, cep_warning = _build_candidates_from_cep(explicit_cep_digits, address)
+        if cep_warning:
+            warnings.append(cep_warning)
+    else:
+        detected_cep = _find_cep(address)
+        cep_candidates, cep_data, cep_warning = _build_candidates_from_cep(detected_cep, address)
+        if cep_warning:
+            warnings.append(cep_warning)
 
-    return None, None, False, None
+    if cep_candidates:
+        coords, provider, fallback = _geocode_candidates(
+            cep_candidates,
+            preferred,
+            cep_data=cep_data,
+            stage_index=0,
+        )
+        if coords:
+            if cep_data and ibge_code:
+                ibge_city_info = get_city_from_ibge_code(_normalize_ibge_code(ibge_code) or "")
+                if ibge_city_info:
+                    cep_city = _normalize_token(cep_data.get("localidade"))
+                    cep_uf = _normalize_uf(cep_data.get("uf"))
+                    ibge_city = _normalize_token(ibge_city_info.get("city_name"))
+                    ibge_uf = _normalize_uf(ibge_city_info.get("state_code"))
+                    if (cep_city and ibge_city and cep_city != ibge_city) or (cep_uf and ibge_uf and cep_uf != ibge_uf):
+                        warnings.append(
+                            f"Inconsistência CEP x IBGE ({explicit_cep_digits or _find_cep(address) or 'sem CEP'} x {ibge_code}); prioridade mantida para CEP."
+                        )
+            return coords, provider, fallback, None, " | ".join(warnings) if warnings else None
+
+    ibge_candidates, ibge_city_info = _build_candidates_from_ibge(ibge_code)
+    if ibge_candidates:
+        coords, provider, fallback = _geocode_candidates(
+            ibge_candidates,
+            preferred,
+            ibge_city_info=ibge_city_info,
+            stage_index=1,
+        )
+        if coords:
+            if cep_data and ibge_city_info:
+                cep_city = _normalize_token(cep_data.get("localidade"))
+                cep_uf = _normalize_uf(cep_data.get("uf"))
+                ibge_city = _normalize_token(ibge_city_info.get("city_name"))
+                ibge_uf = _normalize_uf(ibge_city_info.get("state_code"))
+                if (cep_city and ibge_city and cep_city != ibge_city) or (cep_uf and ibge_uf and cep_uf != ibge_uf):
+                    warnings.append(
+                        f"Inconsistência CEP x IBGE ({explicit_cep_digits or _find_cep(address) or 'sem CEP'} x {ibge_code}); prioridade mantida para CEP."
+                    )
+            return coords, provider, fallback, None, " | ".join(warnings) if warnings else None
+
+    if include_full_address_fallback:
+        full_candidates, _, fallback_cep_data = _build_search_candidates(address)
+        coords, provider, fallback = _geocode_candidates(
+            full_candidates,
+            preferred,
+            cep_data=fallback_cep_data,
+            ibge_city_info=ibge_city_info,
+            stage_index=2,
+        )
+        if coords:
+            return coords, provider, fallback, None, " | ".join(warnings) if warnings else None
+
+    error_message = "Falha na geocodificação por CEP, IBGE e endereço."
+    return None, None, False, error_message, " | ".join(warnings) if warnings else None
 
 
 def _haversine_distance_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
@@ -563,12 +736,24 @@ def calculate_distance_single(
     routing_provider: RoutingProvider = RoutingProvider.AUTO,
     origin_ibge_code: Optional[str] = None,
     destination_ibge_code: Optional[str] = None,
+    origin_cep: Optional[str] = None,
+    destination_cep: Optional[str] = None,
+    destination_use_full_address_fallback: bool = True,
 ) -> DistanceResult:
     try:
-        origin_coords, origin_provider, origin_fallback, origin_geo_error = _geocode_with_fallback(origin_address, geocoding_provider)
-        destination_coords, destination_provider, destination_fallback, destination_geo_error = _geocode_with_fallback(
+        origin_coords, origin_provider, origin_fallback, origin_geo_error, origin_warning = _geocode_with_fallback(
+            origin_address,
+            geocoding_provider,
+            explicit_cep=origin_cep,
+            ibge_code=origin_ibge_code,
+            include_full_address_fallback=True,
+        )
+        destination_coords, destination_provider, destination_fallback, destination_geo_error, destination_warning = _geocode_with_fallback(
             destination_address,
             geocoding_provider,
+            explicit_cep=destination_cep,
+            ibge_code=destination_ibge_code,
+            include_full_address_fallback=destination_use_full_address_fallback,
         )
     except Exception:
         origin_coords = None
@@ -579,10 +764,14 @@ def calculate_distance_single(
         destination_fallback = False
         origin_geo_error = None
         destination_geo_error = None
+        origin_warning = None
+        destination_warning = None
 
     if not origin_coords or not destination_coords:
         error_messages = [msg for msg in [origin_geo_error, destination_geo_error] if msg]
-        error_message = " | ".join(error_messages) if error_messages else "Falha na geocodificação de um ou ambos os endereços."
+        warning_messages = [msg for msg in [origin_warning, destination_warning] if msg]
+        all_messages = error_messages + warning_messages
+        error_message = " | ".join(all_messages) if all_messages else "Falha na geocodificação de um ou ambos os endereços."
         return DistanceResult(
             origin_lat=origin_coords[0] if origin_coords else None,
             origin_lng=origin_coords[1] if origin_coords else None,
@@ -621,7 +810,8 @@ def calculate_distance_single(
         error_message = "Não foi possível calcular a distância."
     else:
         status = "ok"
-        error_message = None
+        warning_messages = [msg for msg in [origin_warning, destination_warning] if msg]
+        error_message = " | ".join(warning_messages) if warning_messages else None
 
     return DistanceResult(
         origin_lat=origin_lat,

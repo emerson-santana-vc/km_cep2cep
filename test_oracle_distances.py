@@ -104,6 +104,10 @@ def test_oracle_with_distance():
             # Build complete addresses
             origin = f"{row.get('endereco_origem', '')} {row.get('cidade_origem', '')} {row.get('uf', '')}"
             destination = f"{row.get('endereco_destino', '')} {row.get('cidade_destino', '')} {row.get('uf', '')}"
+            ibge_codigo_origem = row.get('cidade_ibge_origem')
+            ibge_codigo_destino = row.get('cidade_ibge_destino')
+            cep_origem = row.get('cep_origem')
+            cep_destino = row.get('cep_destino')
             
             print(f"\n    [{idx + 1}] Processando...")
             print(f"        Origem: {origin[:50]}...")
@@ -131,6 +135,10 @@ def test_oracle_with_distance():
                     mode,
                     geocoding_provider=geocoding_provider,
                     routing_provider=routing_provider,
+                    origin_ibge_code=ibge_codigo_origem,
+                    destination_ibge_code=ibge_codigo_destino,
+                    origin_cep=str(cep_origem).strip() if pd.notna(cep_origem) and str(cep_origem).strip() else None,
+                    destination_cep=str(cep_destino).strip() if pd.notna(cep_destino) and str(cep_destino).strip() else None,
                 )
                 
                 distance_km = result.distance_km
@@ -160,6 +168,8 @@ def test_oracle_with_distance():
                         geocoding_provider_used=result.geocoding_provider_used,
                         routing_provider_used=result.routing_provider_used,
                         fallback_used=result.fallback_used,
+                        origin_ibge_code=ibge_codigo_origem,
+                        destination_ibge_code=ibge_codigo_destino,
                     )
                     print(f"        ✓ Salvo no banco de dados")
                 except Exception as db_err:

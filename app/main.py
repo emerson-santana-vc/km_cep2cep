@@ -44,6 +44,11 @@ def process_single():
 
     origin = st.text_input("Endereço de origem")
     destination = st.text_input("Endereço de destino")
+    col_cep1, col_cep2 = st.columns(2)
+    with col_cep1:
+        cep_origem = st.text_input("CEP de origem (opcional)")
+    with col_cep2:
+        cep_destino = st.text_input("CEP de destino (opcional)")
     
     # Optional IBGE codes
     col1, col2 = st.columns(2)
@@ -98,6 +103,8 @@ def process_single():
                     routing_provider=routing_provider,
                     origin_ibge_code=ibge_codigo_origem if ibge_codigo_origem else None,
                     destination_ibge_code=ibge_codigo_destino if ibge_codigo_destino else None,
+                    origin_cep=cep_origem.strip() or None,
+                    destination_cep=cep_destino.strip() or None,
                 )
                 distance_km = result.distance_km
                 save_distance_result(
@@ -151,6 +158,16 @@ def process_batch():
 
     col_origin = st.selectbox("Coluna de endereço de origem", df.columns)
     col_destination = st.selectbox("Coluna de endereço de destino", df.columns)
+    col_cep_origin = st.selectbox(
+        "Coluna de CEP de origem (opcional)",
+        [None] + list(df.columns),
+        index=0,
+    )
+    col_cep_destination = st.selectbox(
+        "Coluna de CEP de destino (opcional)",
+        [None] + list(df.columns),
+        index=0,
+    )
     
     # Optional IBGE code columns
     col_ibge_origin = st.selectbox(
@@ -212,8 +229,20 @@ def process_batch():
             destination = str(row[col_destination])
             
             # Extract IBGE codes if columns are specified
+            cep_origem = None
+            cep_destino = None
             ibge_codigo_origem = None
             ibge_codigo_destino = None
+            if col_cep_origin:
+                try:
+                    cep_origem = str(row[col_cep_origin]) if pd.notna(row[col_cep_origin]) else None
+                except (KeyError, TypeError):
+                    pass
+            if col_cep_destination:
+                try:
+                    cep_destino = str(row[col_cep_destination]) if pd.notna(row[col_cep_destination]) else None
+                except (KeyError, TypeError):
+                    pass
             if col_ibge_origin:
                 try:
                     ibge_codigo_origem = str(row[col_ibge_origin]) if pd.notna(row[col_ibge_origin]) else None
@@ -245,6 +274,8 @@ def process_batch():
                     routing_provider=routing_provider,
                     origin_ibge_code=ibge_codigo_origem,
                     destination_ibge_code=ibge_codigo_destino,
+                    origin_cep=cep_origem,
+                    destination_cep=cep_destino,
                 )
                 distance_km = result.distance_km
                 status = result.status
@@ -397,6 +428,8 @@ def process_oracle_search():
             )
             mode = DistanceMode(mode_label)
             
+        
+        with col2:
             geocoding_provider_label = st.selectbox(
                 "Provedor de geocodificação",
                 options=[provider.value for provider in GeocodingProvider],
@@ -404,8 +437,7 @@ def process_oracle_search():
                 key="oracle_geocoding_provider",
             )
             geocoding_provider = GeocodingProvider(geocoding_provider_label)
-        
-        with col2:
+
             routing_provider_label = st.selectbox(
                 "Provedor de rota",
                 options=[provider.value for provider in RoutingProvider],
@@ -439,6 +471,8 @@ def process_oracle_search():
                 destination = f"{row.get('endereco_destino', '')} {row.get('cidade_destino', '')} {row.get('uf', '')}"
                 
                 # Extract IBGE codes if available
+                cep_origem = row.get('cep_origem')
+                cep_destino = row.get('cep_destino')
                 ibge_codigo_origem = row.get('cidade_ibge_origem')
                 ibge_codigo_destino = row.get('cidade_ibge_destino')
 
@@ -464,6 +498,11 @@ def process_oracle_search():
                         mode,
                         geocoding_provider=geocoding_provider,
                         routing_provider=routing_provider,
+                        origin_ibge_code=ibge_codigo_origem,
+                        destination_ibge_code=ibge_codigo_destino,
+                        origin_cep=str(cep_origem).strip() if pd.notna(cep_origem) and str(cep_origem).strip() else None,
+                        destination_cep=str(cep_destino).strip() if pd.notna(cep_destino) and str(cep_destino).strip() else None,
+                        destination_use_full_address_fallback=True,
                     )
                     distance_km = result.distance_km
                     status = result.status
