@@ -136,7 +136,15 @@ def execute_oracle_query(sql_query: str, bind_params: Optional[dict[str, Any]] =
     config = load_oracle_config()
     validate_oracle_sql(sql_query)
 
-    binds = bind_params or {}
+    input_binds = bind_params or {}
+    normalized_input_binds = {str(key).lower(): value for key, value in input_binds.items()}
+    bind_names = extract_sql_bind_names(sql_query)
+
+    # Build binds exactly as declared in SQL while accepting case-insensitive input keys.
+    binds = {
+        bind_name: normalized_input_binds.get(bind_name.lower())
+        for bind_name in bind_names
+    }
     dsn = build_dsn(config)
 
     try:

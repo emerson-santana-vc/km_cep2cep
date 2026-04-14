@@ -29,6 +29,7 @@ def test_oracle_ui():
     print("\n[2] Detectando campos de filtro...")
     try:
         bind_names = set(extract_sql_bind_names(config.sql_query))
+        bind_names_lower = {name.lower() for name in bind_names}
         print(f"    ✓ Binds: {', '.join(sorted(bind_names))}")
     except Exception as e:
         print(f"    ✗ Erro: {e}")
@@ -49,7 +50,7 @@ def test_oracle_ui():
         "cidade_origem": None,
         "cidade_destino": None,
     }
-    bind_params = {k: v for k, v in bind_params.items() if k in bind_names or k in {"data_inicio", "data_fim"}}
+    bind_params = {k: v for k, v in bind_params.items() if k.lower() in bind_names_lower or k in {"data_inicio", "data_fim"}}
     
     try:
         rows = execute_oracle_query(config.sql_query, bind_params)
@@ -78,7 +79,7 @@ def test_oracle_ui():
         "cidade_origem": None,
         "cidade_destino": None,
     }
-    bind_params = {k: v for k, v in bind_params.items() if k in bind_names or k in {"data_inicio", "data_fim"}}
+    bind_params = {k: v for k, v in bind_params.items() if k.lower() in bind_names_lower or k in {"data_inicio", "data_fim"}}
     
     try:
         rows = execute_oracle_query(config.sql_query, bind_params)
@@ -100,7 +101,7 @@ def test_oracle_ui():
         "cidade_origem": "SÃO PAULO",
         "cidade_destino": None,
     }
-    bind_params = {k: v for k, v in bind_params.items() if k in bind_names or k in {"data_inicio", "data_fim"}}
+    bind_params = {k: v for k, v in bind_params.items() if k.lower() in bind_names_lower or k in {"data_inicio", "data_fim"}}
     
     try:
         rows = execute_oracle_query(config.sql_query, bind_params)
@@ -123,7 +124,7 @@ def test_oracle_ui():
         "cidade_origem": None,
         "cidade_destino": None,
     }
-    bind_params = {k: v for k, v in bind_params.items() if k in bind_names or k in {"data_inicio", "data_fim"}}
+    bind_params = {k: v for k, v in bind_params.items() if k.lower() in bind_names_lower or k in {"data_inicio", "data_fim"}}
     
     try:
         rows = execute_oracle_query(config.sql_query, bind_params)
@@ -148,7 +149,7 @@ def test_oracle_ui():
             "cidade_origem": None,
             "cidade_destino": None,
         }
-        bind_params = {k: v for k, v in bind_params.items() if k in bind_names or k in {"data_inicio", "data_fim"}}
+        bind_params = {k: v for k, v in bind_params.items() if k.lower() in bind_names_lower or k in {"data_inicio", "data_fim"}}
         
         rows = execute_oracle_query(config.sql_query, bind_params)
         result_df = pd.DataFrame(rows)

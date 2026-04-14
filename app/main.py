@@ -325,11 +325,13 @@ def process_oracle_search():
             data_inicio = st.date_input("Data inicial", value=date.today() - timedelta(days=30))
             uf = st.text_input("UF", value="")
             codigo_cliente = st.text_input("Código do cliente", value="")
+            cep_origem = st.text_input("CEP de origem", value="")
         with col2:
             data_fim = st.date_input("Data final", value=date.today())
             codigo_filial = st.text_input("Código da filial", value="")
             cidade_origem = st.text_input("Cidade de origem", value="")
             cidade_destino = st.text_input("Cidade de destino", value="")
+            cep_destino = st.text_input("CEP de destino", value="")
 
         submitted = st.form_submit_button("Executar consulta Oracle")
 
@@ -342,9 +344,16 @@ def process_oracle_search():
             "codigo_cliente": codigo_cliente.strip() or None,
             "cidade_origem": cidade_origem.strip() or None,
             "cidade_destino": cidade_destino.strip() or None,
+            "cep_origem": cep_origem.strip() or None,
+            "cep_destino": cep_destino.strip() or None,
         }
 
-        bind_params = {key: value for key, value in bind_params.items() if key in bind_names or key in {"data_inicio", "data_fim"}}
+        bind_names_lower = {name.lower() for name in bind_names}
+        bind_params = {
+            key: value
+            for key, value in bind_params.items()
+            if key.lower() in bind_names_lower or key in {"data_inicio", "data_fim"}
+        }
 
         try:
             rows = execute_oracle_query(config.sql_query, bind_params)
